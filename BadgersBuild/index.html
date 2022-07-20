@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>BoldBadgersGalaxy</title>
+    <link rel="shortcut icon" href="TemplateData/favicon.ico">
+    <link rel="stylesheet" href="TemplateData/style.css">
+  </head>
+  <body class="dark">
+    <div id="unity-container" class="unity-desktop">
+      <canvas id="unity-canvas"></canvas>
+    </div>
+    <div id="loading-cover" style="display:none;">
+      <div id="unity-loading-bar">
+        <div id="unity-logo"><img src="logo.png"></div>
+        <div id="unity-progress-bar-empty" style="display: none;">
+          <div id="unity-progress-bar-full"></div>
+        </div>
+        <div class="spinner"></div>
+      </div>
+    </div>
+    <div id="unity-fullscreen-button" style="display: none;"></div>
+    <script src="https://cdn.jsdelivr.net/npm/web3@latest/dist/web3.min.js"></script>
+    <script src="https://unpkg.com/moralis/dist/moralis.js"></script>
+    <script>
+      let mainUnityInstance;
+      
+      const serverUrl = "https://gb4ii0cq1mbl.usemoralis.com:2053/server";
+      const appId = "BwTG9FNBssAdZda4qoKu7NbKaLXaINWxKDmgiK4v";
+      
+      function moralisStart () {
+        Moralis.start ({ serverUrl, appId });
+      }
+      async function moralisLoginAsync () {
+        let currentUser = Moralis.User.current ();
+
+        if (!currentUser) {
+          try {
+            await Moralis.authenticate ({ type: "sol", signingMessage: "Login into game" })
+              .then(function (user) {
+                console.log(user);
+                console.log(user.get("solAddress"));
+
+                mainUnityInstance.SendMessage ('MoralisController', 'SetMoralisSessionID', user.attributes.sessionToken);
+                mainUnityInstance.SendMessage ('MoralisController', 'SetUsername', user.get("username"));
+              })
+              .catch(function (error) {
+                console.log (error);
+
+                mainUnityInstance.SendMessage ('MoralisController', 'MoralisAuthFailed', error);
+              });
+          } catch (error) {
+            console.log(error);
+
+            mainUnityInstance.SendMessage ('MoralisController', 'MoralisAuthFailed', error);
+          }
+        } else {
+          console.log(currentUser);
+          
+          mainUnityInstance.SendMessage ('MoralisController', 'SetMoralisSessionID', currentUser.attributes.sessionToken);
+          mainUnityInstance.SendMessage ('MoralisController', 'SetUsername', currentUser.get("username"));
+        }
+      }
+      async function moralisLogoutAsync () {
+        await Moralis.User.logOut();
+        
+        console.log("logged out");
+      }
+      
+      const hideFullScreenButton = "true";
+      const buildUrl = "Build";
+      const loaderUrl = buildUrl + "/BadgersBuild.loader.js";
+      const config = {
+        dataUrl: buildUrl + "/BadgersBuild.data.br",
+        frameworkUrl: buildUrl + "/BadgersBuild.framework.js.br",
+        codeUrl: buildUrl + "/BadgersBuild.wasm.br",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "SolanaArt",
+        productName: "BoldBadgersGalaxy",
+        productVersion: "0.2.1",
+      };
+
+      const container = document.querySelector("#unity-container");
+      const canvas = document.querySelector("#unity-canvas");
+      const loadingCover = document.querySelector("#loading-cover");
+      const progressBarEmpty = document.querySelector("#unity-progress-bar-empty");
+      const progressBarFull = document.querySelector("#unity-progress-bar-full");
+      const fullscreenButton = document.querySelector("#unity-fullscreen-button");
+      const spinner = document.querySelector('.spinner');
+
+      const isMobile = /Mobi|iPhone|iPad|iPod|Android/i.test(window.navigator.userAgent);
+      
+      const canFullscreen = (function() {
+        for (const key of [
+            'exitFullscreen',
+            'webkitExitFullscreen',
+            'webkitCancelFullScreen',
+            'mozCancelFullScreen',
+            'msExitFullscreen',
+          ]) {
+          if (key in document) {
+            return true;
+          }
+        }
+        return false;
+      }());
+
+      if (isMobile) {
+        container.className = "unity-mobile";
+        config.devicePixelRatio = 1;
+      }
+      loadingCover.style.display = "";
+
+      const script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = () => {
+        createUnityInstance(canvas, config, (progress) => {
+          spinner.style.display = "none";
+          progressBarEmpty.style.display = "";
+          progressBarFull.style.width = `${100 * progress}%`;
+        }).then((unityInstance) => {
+          mainUnityInstance = unityInstance;
+          
+          // Fix for virtual keyboard issue on mobile
+          const input = document.createElement("input");
+          input.type = "text";
+          input.id = "dummy-input";
+          input.oninput = () => {
+            if (input.IsSyncing) return;
+            //unityInstance.Module.ccall('OnExternalInputUpdate', null);
+            let json = "{ \"Value\": \""+escape(input.value)+"\", \"SelectionStart\": "+input.selectionStart+", \"SelectionEnd\": "+input.selectionEnd+" }";
+            unityInstance.SendMessage('EventSystem', 'ExternalInputUpdated', json);
+          }
+          input.onblur = () => {
+            //unityInstance.Module.ccall('OnExternalInputBlur', null);
+            unityInstance.SendMessage('EventSystem', 'ExternalInputBlurred');
+          }
+          
+          const form = document.createElement("form");
+          form.id = "dummy-form";
+          form.autocomplete = "off";
+          form.onsubmit = (e) => {
+            input.blur();
+            e.preventDefault();
+          }
+          
+          form.appendChild(input);
+          document.body.appendChild(form);
+          
+          // Other code
+          loadingCover.style.display = "none";
+          
+          if (canFullscreen) {
+            if (!hideFullScreenButton) {
+              fullscreenButton.style.display = "";
+            }
+            fullscreenButton.onclick = async () => {
+              unityInstance.SetFullscreen(1);
+
+              // Lock orientation to landscape
+              try{
+                await screen.orientation.lock("landscape-primary"); // Chrome, IE, Firefox and Opera 
+              }catch(err){
+                // if ("orientation" in screen){
+                //   if ("lock" in screen.orientation)
+                //   else{ // Safari
+                //     console.log("No support for orientation lock");
+                //     // function deviceOrientation() {
+                //     //   let body = document.body;
+                //     //   body.classList.remove("rotation90");
+                //     //   body.classList.remove("rotation-90");
+                //     //   body.classList.remove("portrait");
+                //     //  
+                //     //   switch(screen.orientation.angle) {
+                //     //     case 90:
+                //     //       body.classList.add("rotation90");
+                //     //       break;
+                //     //     case -90:
+                //     //       body.classList.add("rotation-90");
+                //     //       break;
+                //     //     default:
+                //     //       body.classList.add("portrait");
+                //     //       break;
+                //     //   }
+                //     // }
+                //     //
+                //     // window.addEventListener('orientationchange', deviceOrientation);
+                //     // deviceOrientation();
+                //   }
+                // }
+                console.log("Error when locking orientation");
+                console.error(err);
+              }
+            };
+          }
+        }).catch((message) => {
+          alert(message);
+        });
+      };
+      document.body.appendChild(script);
+    </script>
+  </body>
+</html>
